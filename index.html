@@ -3,122 +3,57 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QR High-Speed Receiver</title>
+    <title>Turbo QR Receiver</title>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
-        body { font-family: -apple-system, sans-serif; text-align: center; background: #121212; color: white; padding: 20px; margin: 0; }
-        h2 { color: #ffffff; margin-bottom: 10px; }
-        #reader { width: 100%; max-width: 500px; margin: 10px auto; border-radius: 12px; overflow: hidden; background: #000; }
-        .progress-container { margin: 25px auto; width: 90%; background: #333; height: 20px; border-radius: 10px; overflow: hidden; }
-        #progress-bar { width: 0%; height: 100%; background: #28a745; transition: width 0.2s ease; }
-        #status { font-weight: 600; margin-top: 15px; color: #007bff; min-height: 24px; }
-        .stats { font-size: 0.8em; color: #888; margin-top: 8px; }
-        .instruction { font-size: 0.9em; color: #aaa; margin-bottom: 20px; }
+        body { font-family: sans-serif; text-align: center; background: #000; color: white; padding: 10px; margin: 0; }
+        #reader { width: 100%; max-width: 450px; margin: auto; border-radius: 15px; overflow: hidden; }
+        .progress-container { margin: 20px auto; width: 90%; background: #222; height: 15px; border-radius: 10px; }
+        #progress-bar { width: 0%; height: 100%; background: #007bff; border-radius: 10px; transition: width 0.1s; }
+        #status { font-weight: bold; font-size: 1.1em; color: #007bff; }
     </style>
 </head>
 <body>
-
-    <h2>QR Data Receiver</h2>
-    <p class="instruction">Keep phone steady at 12-15 inches from screen</p>
-    
     <div id="reader"></div>
-    
-    <div class="progress-container">
-        <div id="progress-bar"></div>
-    </div>
-    
-    <div id="status">Waiting for PC stream...</div>
-    <div id="stats" class="stats">0 / 0 chunks collected</div>
+    <div class="progress-container"><div id="progress-bar"></div></div>
+    <div id="status">Ready for Stream</div>
+    <div id="stats" style="color: #666; font-size: 0.8em; margin-top: 5px;">0 / 0 chunks</div>
 
     <script>
         const chunks = {};
-        let totalChunks = 0;
-        let receivedFileName = "document.docx";
-        let isComplete = false;
+        let totalChunks = 0, receivedFileName = "", isComplete = false;
 
-        // --- 1. THE SCANNER LOGIC ---
-        function onScanSuccess(decodedText) {
+        async function onScanSuccess(decodedText) {
             if (isComplete) return;
-
-            // Expecting format: index | total | fileName | data
             const parts = decodedText.split('|');
             if (parts.length < 4) return;
 
-            const index = parseInt(parts[0]);
-            const total = parseInt(parts[1]);
-            const fileName = parts[2];
-            const data = parts[3];
+            const idx = parseInt(parts[0]), tot = parseInt(parts[1]), name = parts[2], data = parts[3];
+            if (!totalChunks) { totalChunks = tot; receivedFileName = name; }
 
-            if (!totalChunks) totalChunks = total;
-            if (fileName && fileName !== receivedFileName) receivedFileName = fileName;
-
-            // Store the unique chunk
-            if (!chunks[index]) {
-                chunks[index] = data;
-                updateUI();
-            }
-
-            // Check if we have the full puzzle
-            if (Object.keys(chunks).length === totalChunks) {
-                isComplete = true;
-                assembleAndSave();
+            if (!chunks[idx]) {
+                chunks[idx] = data;
+                const count = Object.keys(chunks).length;
+                const percent = (count / totalChunks * 100).toFixed(1);
+                document.getElementById('progress-bar').style.width = percent + "%";
+                document.getElementById('status').innerText = `Catching: ${percent}%`;
+                document.getElementById('stats').innerText = `${count} / ${totalChunks} pieces`;
+                if (count === totalChunks) { isComplete = true; download(); }
             }
         }
 
-        function updateUI() {
-            const count = Object.keys(chunks).length;
-            const percent = (count / totalChunks * 100).toFixed(1);
-            document.getElementById('progress-bar').style.width = percent + "%";
-            document.getElementById('status').innerText = `Receiving: ${percent}%`;
-            document.getElementById('stats').innerText = `${count} / ${totalChunks} pieces collected`;
+        async function download() {
+            document.getElementById('status').innerText = "Reassembling...";
+            const blob = await (await fetch(`data:application/octet-stream;base64,${Object.keys(chunks).sort((a,b)=>a-b).map(k=>chunks[k]).join('')}`)).blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = receivedFileName; a.click();
+            document.getElementById('status').innerText = "DONE! Saved.";
         }
 
-        // --- 2. THE FAST REASSEMBLY LOGIC ---
-        async function assembleAndSave() {
-            document.getElementById('status').innerText = "Processing High-Speed Download...";
-            document.getElementById('status').style.color = "#28a745";
-
-            // Optimized Array Join (100x faster than += string addition)
-            const chunkArray = [];
-            for (let i = 0; i < totalChunks; i++) {
-                chunkArray.push(chunks[i]);
-            }
-            const fullBase64 = chunkArray.join('');
-
-            try {
-                // Use the Native Fetch API to decode Base64 instantly
-                const response = await fetch(`data:application/octet-stream;base64,${fullBase64}`);
-                const blob = await response.blob();
-                
-                // Create a temporary link and trigger the save
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = receivedFileName; 
-                document.body.appendChild(a);
-                a.click();
-                
-                document.getElementById('status').innerText = "DONE! Saved to Files app.";
-                document.getElementById('progress-bar').style.background = "#007bff";
-            } catch (err) {
-                console.error(err);
-                document.getElementById('status').innerText = "Error: File too large or corrupted.";
-                document.getElementById('status').style.color = "red";
-            }
-        }
-
-        // --- 3. START THE CAMERA ---
-        const html5QrCode = new Html5Qrcode("reader");
-        const config = { fps: 20, qrbox: { width: 280, height: 280 } };
-
-        html5QrCode.start(
-            { facingMode: "environment" }, 
-            config, 
-            onScanSuccess
-        ).catch(err => {
-            document.getElementById('status').innerText = "Camera Error: Check HTTPS settings.";
-            console.error(err);
-        });
+        const scanner = new Html5Qrcode("reader");
+        // INCREASED FPS TO 30 FOR SMOOTH CATCHING
+        scanner.start({ facingMode: "environment" }, { fps: 30, qrbox: 280 }, onScanSuccess);
     </script>
 </body>
 </html>
