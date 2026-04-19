@@ -3,57 +3,133 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Turbo QR Receiver</title>
+    <title>Universal QR Transfer</title>
+    <script src="https://cdn.jsdelivr.net/npm/easyqrcodejs@4.4.10/dist/easy.qrcode.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #000; color: white; padding: 10px; margin: 0; }
-        #reader { width: 100%; max-width: 450px; margin: auto; border-radius: 15px; overflow: hidden; }
-        .progress-container { margin: 20px auto; width: 90%; background: #222; height: 15px; border-radius: 10px; }
-        #progress-bar { width: 0%; height: 100%; background: #007bff; border-radius: 10px; transition: width 0.1s; }
-        #status { font-weight: bold; font-size: 1.1em; color: #007bff; }
+        body { font-family: -apple-system, sans-serif; text-align: center; background: #121212; color: white; padding: 20px; margin: 0; }
+        .dashboard { background: #1e1e1e; padding: 20px; border-radius: 15px; max-width: 500px; margin: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .nav-buttons { display: flex; gap: 10px; justify-content: center; margin-bottom: 20px; }
+        button { padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px; transition: 0.2s; }
+        .btn-send { background: #007bff; color: white; }
+        .btn-receive { background: #28a745; color: white; }
+        .hidden { display: none; }
+        
+        /* Sender Styles */
+        #qrcode { background: white; padding: 15px; border-radius: 8px; margin: 20px auto; width: 350px; height: 350px; display: flex; justify-content: center; align-items: center; }
+        
+        /* Receiver Styles */
+        #reader { width: 100%; border-radius: 12px; overflow: hidden; background: #000; margin-top: 10px; }
+        
+        /* Progress Styles */
+        .progress-container { width: 100%; background: #333; height: 15px; border-radius: 10px; margin: 20px 0; overflow: hidden; }
+        #progress-bar { width: 0%; height: 100%; background: #007bff; transition: width 0.1s; }
+        #status { font-weight: bold; margin-top: 10px; color: #aaa; }
     </style>
 </head>
 <body>
-    <div id="reader"></div>
-    <div class="progress-container"><div id="progress-bar"></div></div>
-    <div id="status">Ready for Stream</div>
-    <div id="stats" style="color: #666; font-size: 0.8em; margin-top: 5px;">0 / 0 chunks</div>
+
+    <div class="dashboard">
+        <h2>QR Tools</h2>
+        <div class="nav-buttons">
+            <button class="btn-send" onclick="showMode('send')">Projector (Send)</button>
+            <button class="btn-receive" onclick="showMode('receive')">Receiver (Catch)</button>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #333; margin: 20px 0;">
+
+        <div id="mode-send" class="hidden">
+            <h3>Projector Mode</h3>
+            <input type="file" id="file-input" style="margin-bottom: 15px;">
+            <div id="qrcode"></div>
+            <div class="progress-container"><div id="progress-bar-send" style="width: 0%; height: 100%; background: #007bff;"></div></div>
+            <div id="status-send">Ready to beam...</div>
+        </div>
+
+        <div id="mode-receive" class="hidden">
+            <h3>Receiver Mode</h3>
+            <div id="reader"></div>
+            <div class="progress-container"><div id="progress-bar-receive" style="width: 0%; height: 100%; background: #28a745;"></div></div>
+            <div id="status-receive">Waiting for camera...</div>
+        </div>
+    </div>
 
     <script>
-        const chunks = {};
-        let totalChunks = 0, receivedFileName = "", isComplete = false;
-
-        async function onScanSuccess(decodedText) {
-            if (isComplete) return;
-            const parts = decodedText.split('|');
-            if (parts.length < 4) return;
-
-            const idx = parseInt(parts[0]), tot = parseInt(parts[1]), name = parts[2], data = parts[3];
-            if (!totalChunks) { totalChunks = tot; receivedFileName = name; }
-
-            if (!chunks[idx]) {
-                chunks[idx] = data;
-                const count = Object.keys(chunks).length;
-                const percent = (count / totalChunks * 100).toFixed(1);
-                document.getElementById('progress-bar').style.width = percent + "%";
-                document.getElementById('status').innerText = `Catching: ${percent}%`;
-                document.getElementById('stats').innerText = `${count} / ${totalChunks} pieces`;
-                if (count === totalChunks) { isComplete = true; download(); }
-            }
+        // --- Navigation Logic ---
+        function showMode(mode) {
+            document.getElementById('mode-send').classList.add('hidden');
+            document.getElementById('mode-receive').classList.add('hidden');
+            document.getElementById('mode-' + mode).classList.remove('hidden');
+            if (mode === 'receive') startScanner();
+            else stopScanner();
         }
 
+        // --- GLOBAL VARIABLES ---
+        let sendTimer = null, chunks = {}, totalChunks = 0, fileName = "", isComplete = false;
+        const scanner = new Html5Qrcode("reader");
+
+        // --- SENDER LOGIC ---
+        document.getElementById('file-input').onchange = function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            fileName = file.name.replace(/[^a-z0-9\.]/gi, '_');
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const base64Data = event.target.result.split(',')[1];
+                const chunkSize = 250; 
+                const chunkList = [];
+                for (let i = 0; i < base64Data.length; i += chunkSize) {
+                    chunkList.push(base64Data.substring(i, i + chunkSize));
+                }
+                startFountain(chunkList);
+            };
+            reader.readAsDataURL(file);
+        };
+
+        function startFountain(chunkList) {
+            let current = 0;
+            const total = chunkList.length;
+            const qrContainer = document.getElementById("qrcode");
+            if (sendTimer) clearInterval(sendTimer);
+
+            sendTimer = setInterval(() => {
+                const payload = `${current}|${total}|${fileName}|${chunkList[current]}`;
+                qrContainer.innerHTML = "";
+                new QRCode(qrContainer, { text: payload, width: 350, height: 350, correctLevel: QRCode.CorrectLevel.L });
+                document.getElementById("progress-bar-send").style.width = ((current + 1) / total * 100) + "%";
+                document.getElementById("status-send").innerText = `Beaming: ${current + 1} / ${total}`;
+                current = (current + 1) % total;
+            }, 180);
+        }
+
+        // --- RECEIVER LOGIC ---
+        function startScanner() {
+            scanner.start({ facingMode: "environment" }, { fps: 25, qrbox: 250 }, (text) => {
+                if (isComplete) return;
+                const p = text.split('|');
+                if (p.length < 4) return;
+                const idx = parseInt(p[0]), tot = parseInt(p[1]), name = p[2], data = p[3];
+                if (!totalChunks) { totalChunks = tot; fileName = name; }
+                if (!chunks[idx]) {
+                    chunks[idx] = data;
+                    const count = Object.keys(chunks).length;
+                    document.getElementById('progress-bar-receive').style.width = (count / totalChunks * 100) + "%";
+                    document.getElementById('status-receive').innerText = `Catching: ${count}/${totalChunks}`;
+                    if (count === totalChunks) { isComplete = true; download(); }
+                }
+            }).catch(console.error);
+        }
+
+        function stopScanner() { scanner.stop().catch(() => {}); }
+
         async function download() {
-            document.getElementById('status').innerText = "Reassembling...";
+            document.getElementById('status-receive').innerText = "Reassembling...";
             const blob = await (await fetch(`data:application/octet-stream;base64,${Object.keys(chunks).sort((a,b)=>a-b).map(k=>chunks[k]).join('')}`)).blob();
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url; a.download = receivedFileName; a.click();
-            document.getElementById('status').innerText = "DONE! Saved.";
+            a.href = url; a.download = fileName; a.click();
+            document.getElementById('status-receive').innerText = "DONE! Saved.";
         }
-
-        const scanner = new Html5Qrcode("reader");
-        // INCREASED FPS TO 30 FOR SMOOTH CATCHING
-        scanner.start({ facingMode: "environment" }, { fps: 30, qrbox: 280 }, onScanSuccess);
     </script>
 </body>
 </html>
