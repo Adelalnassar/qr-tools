@@ -2,102 +2,81 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>QR Data Receiver</title>
+    <title>QR Receiver (With Filename)</title>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         body { font-family: sans-serif; text-align: center; background: #121212; color: white; padding: 20px; }
-        #reader { width: 100%; max-width: 500px; margin: auto; border: 2px solid #333; border-radius: 10px; overflow: hidden; }
-        .progress-container { margin: 20px auto; width: 80%; background: #333; height: 25px; border-radius: 15px; position: relative; }
-        #progress-bar { width: 0%; height: 100%; background: #28a745; border-radius: 15px; transition: width 0.2s; }
-        #status { margin-top: 15px; font-weight: bold; }
+        #reader { width: 100%; max-width: 500px; margin: auto; border-radius: 10px; overflow: hidden; }
+        #progress-bar { width: 0%; height: 25px; background: #28a745; border-radius: 15px; transition: width 0.2s; }
+        .progress-container { margin: 20px auto; width: 80%; background: #333; height: 25px; border-radius: 15px; }
     </style>
 </head>
 <body>
-    <h2>QR Stream Receiver</h2>
+    <h2>QR Receiver</h2>
     <div id="reader"></div>
-    
-    <div class="progress-container">
-        <div id="progress-bar"></div>
-    </div>
-    
-    <div id="status">Waiting for stream...</div>
-    <div id="stats" style="font-size: 0.8em; color: #888;">0 / 0 chunks collected</div>
+    <div class="progress-container"><div id="progress-bar"></div></div>
+    <div id="status">Point at the PC screen...</div>
 
     <script>
         const chunks = {};
         let totalChunks = 0;
+        let receivedFileName = "downloaded_file.docx";
         let isComplete = false;
 
         function onScanSuccess(decodedText) {
             if (isComplete) return;
-
-            // Header format: index|total|data
             const parts = decodedText.split('|');
-            if (parts.length < 3) return;
+            if (parts.length < 4) return; // Expecting 4 parts now
 
             const index = parseInt(parts[0]);
             const total = parseInt(parts[1]);
-            const data = parts[2];
+            const fileName = parts[2];
+            const data = parts[3];
 
-            if (!totalChunks) totalChunks = total;
+            if (!totalChunks) {
+                totalChunks = total;
+                receivedFileName = fileName;
+            }
 
-            // Store the chunk if we don't have it
             if (!chunks[index]) {
                 chunks[index] = data;
-                updateProgress();
-            }
+                const count = Object.keys(chunks).length;
+                const percent = (count / totalChunks * 100).toFixed(1);
+                document.getElementById('progress-bar').style.width = percent + "%";
+                document.getElementById('status').innerText = `Receiving ${receivedFileName}: ${percent}%`;
 
-            // Check if we have everything
-            if (Object.keys(chunks).length === totalChunks) {
-                isComplete = true;
-                assembleFile();
+                if (count === totalChunks) {
+                    isComplete = true;
+                    assembleAndSave();
+                }
             }
         }
 
-        function updateProgress() {
-            const count = Object.keys(chunks).length;
-            const percent = (count / totalChunks * 100).toFixed(1);
-            document.getElementById('progress-bar').style.width = percent + "%";
-            document.getElementById('status').innerText = `Receiving: ${percent}%`;
-            document.getElementById('stats').innerText = `${count} / ${totalChunks} chunks collected`;
-        }
-
-        function assembleFile() {
-            document.getElementById('status').innerText = "Reassembling file...";
-            
-            // 1. Join chunks in order
-            let base64 = "";
+        function assembleAndSave() {
+            document.getElementById('status').innerText = "Finishing...";
+            let fullBase64 = "";
             for (let i = 0; i < totalChunks; i++) {
-                base64 += chunks[i];
+                fullBase64 += chunks[i];
             }
 
-            // 2. Convert Base64 back to a file Blob
-            const byteCharacters = atob(base64);
+            const byteCharacters = atob(fullBase64);
             const byteNumbers = new Array(byteCharacters.length);
             for (let i = 0; i < byteCharacters.length; i++) {
                 byteNumbers[i] = byteCharacters.charCodeAt(i);
             }
-            const byteArray = new Uint8Array(byteNumbers);
-            const blob = new Blob([byteArray], {type: "application/octet-stream"});
-
-            // 3. Trigger Download
+            const blob = new Blob([new Uint8Array(byteNumbers)], {type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+            
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = "transferred_file";
+            a.download = receivedFileName; // This uses the real Word filename!
             document.body.appendChild(a);
             a.click();
-            
-            document.getElementById('status').innerText = "Transfer Complete! Check downloads.";
+            document.getElementById('status').innerText = "Done! Open your Files app.";
         }
 
-        // Initialize Camera
         const html5QrCode = new Html5Qrcode("reader");
-        html5QrCode.start(
-            { facingMode: "environment" }, 
-            { fps: 15, qrbox: { width: 250, height: 250 } },
-            onScanSuccess
-        );
+        html5QrCode.start({ facingMode: "environment" }, { fps: 20, qrbox: 250 }, onScanSuccess);
     </script>
 </body>
 </html>
